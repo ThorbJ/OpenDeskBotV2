@@ -1,0 +1,179 @@
+name: Thorb fork build (unofficial)
+
+# Thorb 的 fork 专用（不进给上游的 PR）：测试，再打 Windows 安装器和 macOS DMG。
+# - 推 thorb-release 分支（或手动触发）：只出工作流产物（Actions 页面下载，需登录 GitHub）。
+#   手动触发要求工作流在默认分支上，而 fork 的 main 只跟上游，所以靠推分支触发。
+# - 推 thorb-v* 标签：另建一个公开 Release，名称和说明写明 Thorb fork、非官方。
+on:
+  workflow_dispatch:
+  push:
+    branches: [thorb-release]
+    tags: ["thorb-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.cache/uv
+    defaults:
+      run:
+        working-directory: service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install locked package and dev tools
+        run: |
+          python -m pip install --disable-pip-version-check "uv==0.8.22"
+          uv sync --locked --extra dev
+
+      - name: Prepare pinned test model
+        run: |
+          mkdir -p models/silero_vad
+          uv run --locked python tools/fetch_test_assets.py
+
+      - name: Ruff
+        run: uv run --locked ruff check src tools tests
+
+      - name: Pytest
+        run: uv run --locked pytest -q tests
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      # 以下几步与上游 .github/workflows/build-windows.yml 相同。
+      - name: Create the build virtual environment from uv.lock
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --upgrade pip "uv==0.8.22"
+          .\.venv\Scripts\uv.exe sync --locked --no-install-project
+          if (-not (Test-Path -LiteralPath .venv\Scripts\pip.exe)) {
+            .\.venv\Scripts\python.exe -m ensurepip --upgrade
+          }
+          .\.venv\Scripts\python.exe -c "import flask, sqlalchemy, numpy, aiohttp, livekit, websockets; print('deps ok')"
+
+      - name: Install the LiveKit server binary
+        run: powershell -ExecutionPolicy Bypass -File tools/install_livekit_windows.ps1
+
+      - name: Fetch the pinned Silero VAD model
+        run: .\.venv\Scripts\python.exe tools/fetch_test_assets.py
+
+      - name: Locate NSIS
+        id: nsis
+        run: |
+          $candidates = @(
+            "C:\Program Files (x86)\NSIS\makensis.exe",
+            "C:\Program Files\NSIS\makensis.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $found) {
+            choco install nsis -y --no-progress
+            $found = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $found) { throw "makensis.exe not found" }
+          "path=$found" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Build the client and the NSIS installer
+        run: |
+          & .\client\Build-Client.ps1 -BuildInstaller -MakeNsisPath "${{ steps.nsis.outputs.path }}"
+
+      - name: Name and hash the installer
+        run: |
+          $out = "dist\OpenDeskBotV2-Thorb-unofficial-Windows-Setup.exe"
+          Move-Item -LiteralPath "dist\OpenDeskBotV2-Setup.exe" -Destination $out -Force
+          $hash = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $out)" | Out-File -Encoding ascii "$out.sha256"
+          Copy-Item -LiteralPath ..\THORB-RELEASE-NOTES.md -Destination dist\
+          Write-Host "SHA-256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenDeskBotV2-Thorb-unofficial-Windows
+          path: |
+            service/dist/OpenDeskBotV2-Thorb-unofficial-Windows-Setup.exe
+            service/dist/OpenDeskBotV2-Thorb-unofficial-Windows-Setup.exe.sha256
+            service/dist/THORB-RELEASE-NOTES.md
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: service
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the app and the DMG
+        env:
+          # 构建脚本默认用国内镜像；GitHub 的机器直接用官方 PyPI。
+          PIP_INDEX_URL: https://pypi.org/simple
+        run: ./client-macos/build-client-macos.sh --no-seed-env
+
+      - name: Name and hash the DMG
+        run: |
+          out=dist/OpenDeskBotV2-Thorb-unofficial-macOS-arm64.dmg
+          mv dist/OpenDeskBotV2.dmg "$out"
+          rm -f dist/OpenDeskBotV2.dmg.sha256
+          (cd dist && shasum -a 256 "$(basename "$out")" > "$(basename "$out").sha256")
+          cp ../THORB-RELEASE-NOTES.md dist/
+          cat "$out.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenDeskBotV2-Thorb-unofficial-macOS
+          path: |
+            service/dist/OpenDeskBotV2-Thorb-unofficial-macOS-arm64.dmg
+            service/dist/OpenDeskBotV2-Thorb-unofficial-macOS-arm64.dmg.sha256
+            service/dist/THORB-RELEASE-NOTES.md
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/thorb-v')
+    needs: [tests, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish the release (unofficial)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Open Desk Bot V2 · Thorb fork $TAG（非官方 / unofficial）" \
+            --notes-file THORB-RELEASE-NOTES.md \
+            --latest \
+            artifacts/OpenDeskBotV2-Thorb-unofficial-Windows-Setup.exe \
+            artifacts/OpenDeskBotV2-Thorb-unofficial-Windows-Setup.exe.sha256 \
+            artifacts/OpenDeskBotV2-Thorb-unofficial-macOS-arm64.dmg \
+            artifacts/OpenDeskBotV2-Thorb-unofficial-macOS-arm64.dmg.sha256
