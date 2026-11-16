@@ -435,7 +435,8 @@ class SerialDeviceManager:
                 logger.debug("attach_stream_session: swallowed exception", exc_info=True)
             raise
         logger.info(
-            "[wifi_link] probing peer=%s generation=%d",
+            "[%s] probing peer=%s generation=%d",
+            "wifi_link" if transport == "wifi_tcp" else transport,
             name,
             session.generation,
         )

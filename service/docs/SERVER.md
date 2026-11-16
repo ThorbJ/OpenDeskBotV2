@@ -21,6 +21,7 @@ SKIP_SETUP=1 ./start.sh
 | `5050` | Flask Web | 本机控制台、运行时设备选择、本地设置与调试 UI，不打开串口 |
 | `18790` | RTC Agent SDK | 本机 LiveKit Agent 辅助服务，由 Core 管理，不对外开放 |
 | `7880` | 本机 LiveKit Server | RTC 信令与媒体，由 Core 自动启动、监测和停止 |
+| `9022` | Core（可选） | 虚拟设备连接 `ws://127.0.0.1:9022/virtual-device`，默认关闭，只听本机 |
 
 Windows 有两种等价启动形态：开发用 `tools\run_local_windows.ps1`（先执行
 `tools\install_livekit_windows.ps1` 安装本机 LiveKit Server），或使用
@@ -38,6 +39,14 @@ Core（LiveKit/RTC Agent 缺席只显示“RTC 未就绪”），停止时先发
 4. hello 回传由 eFuse MAC 派生的 `device_id`；它仅用于当前 USB/RTC/ACK 路由。
 5. Core 将完成 hello 的连接加入内存中的 live session 集合，不据此创建业务数据目录。
 6. 打开 `:5050` 即可使用。单台设备自动成为当前目标，多台设备可切换控制目标。
+
+## 虚拟设备接入（可选）
+
+1. 在控制台「设备连接 → 虚拟设备连接」点「开启」（写 `.env` 的
+   `DESKBOT_VIRTUAL_DEVICE_ENABLED=1`，Core 每秒读一次，开关不用重启）。
+2. Core 在 `127.0.0.1:9022` 监听 `/virtual-device`，只接受允许来源（`Origin`）的网页。
+3. 网页里的虚拟设备连上后，Core 照常发 DBOT hello；完成握手即和 USB 设备一样出现在
+   「设备连接」页，连接方式显示「虚拟设备（本机 WebSocket）」。
 
 `/api/usb-devices` 只接受本机进程间 API Key（`X-API-Key`，来源
 `data/.free_api_key`），并只返回完成 hello 的 live USB session；浏览器提交字符串

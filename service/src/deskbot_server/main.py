@@ -33,6 +33,7 @@ from deskbot_server.infrastructure.net.core_discovery import (
     install_core_discovery,
 )
 from deskbot_server.infrastructure.net.core_identity import core_id, core_name
+from deskbot_server.infrastructure.net.virtual_device_link import VirtualDeviceLink
 from deskbot_server.infrastructure.net.wifi_link import (
     WifiLinkListener,
     wifi_link_enabled,
@@ -402,6 +403,11 @@ async def main():
         )
         install_core_discovery(core_discovery)
 
+    # 浏览器里的虚拟设备经本机 WebSocket 接入同一个串口管理器；默认关闭，
+    # 控制台「设备连接」页打开后约 1 秒内生效，不用重启。
+    virtual_device_link = VirtualDeviceLink(serial_bridge.manager.attach_stream_session)
+    virtual_device_task: asyncio.Task | None = None
+
     async def _start_rtc_stack() -> None:
         # Cold-start imports inside the Agent SDK can exceed 20-30s on
         # Windows (LiveKit/AV/Silero), and wait_ready allows up to 120s.
@@ -470,6 +476,10 @@ async def main():
     rtc_startup_task.add_done_callback(_rtc_startup_done)
     try:
         await serial_bridge.start()
+        virtual_device_task = asyncio.create_task(
+            virtual_device_link.run(),
+            name="virtual-device-link",
+        )
         if wifi_listener is not None and not wifi_listener.start():
             wifi_listener = None
         if wifi_listener is not None and core_discovery is not None:
@@ -543,6 +553,12 @@ async def main():
                             core_discovery.stop()
                         if wifi_listener is not None:
                             wifi_listener.stop()
+                        if virtual_device_task is not None:
+                            virtual_device_task.cancel()
+                            await asyncio.gather(
+                                virtual_device_task, return_exceptions=True
+                            )
+                        await virtual_device_link.stop()
                         await serial_bridge.stop()
                     finally:
                         try:

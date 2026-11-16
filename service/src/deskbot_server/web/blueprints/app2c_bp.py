@@ -41,6 +41,10 @@ from deskbot_server.face_mouth_config_store import (
 )
 from deskbot_server.hardware_catalog import list_devices
 from deskbot_server.image_gen_env_store import image_gen_config_status, save_image_gen_env
+from deskbot_server.infrastructure.net.virtual_device_link import (
+    save_virtual_device_settings,
+    virtual_device_settings,
+)
 from deskbot_server.llm.config_state import (
     get_llm_config_status,
     read_llm_env_values,
@@ -333,6 +337,24 @@ def sessions():
 def devices():
     # USB 设备与 WiFi 配网合并为「设备连接」单页。
     return render_template("app2c/connection.html", active_nav="device")
+
+
+@bp.get("/api/setup/virtual-device")
+def setup_virtual_device_get():
+    """「设备连接」页的虚拟设备开关：是否开启、本机地址、允许的网页来源。"""
+    return jsonify({"ok": True, **virtual_device_settings()})
+
+
+@bp.patch("/api/setup/virtual-device")
+def setup_virtual_device_patch():
+    payload = request.get_json(silent=True) or {}
+    try:
+        status = save_virtual_device_settings(payload)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, **status})
 
 
 @bp.get("/wifi")

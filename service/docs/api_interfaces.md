@@ -23,9 +23,26 @@ PB/DBOT 字段见 [esp32_pb_protocol.md](./esp32_pb_protocol.md)。
 | Deskbot Core | `http://127.0.0.1:9000` / `ws://127.0.0.1:9000` | `deskbot_server.ws`、`deskbot_server.infrastructure.serial` | USB CDC 唯一串口进程、RTC/业务流水线、内部 HTTP、调试订阅 |
 | RTC Agent | `http://127.0.0.1:18790` | `deskbot_server.rtc_agent_sdk` | 本地 token endpoint、LiveKit worker 与 AgentSession |
 | 本机 LiveKit Server | `http://127.0.0.1:7880` | `deskbot_server.local_livekit` | RTC 信令与媒体，由 Core 启停 |
+| 虚拟设备连接（可选） | `ws://127.0.0.1:9022/virtual-device` | `deskbot_server.infrastructure.net.virtual_device_link` | 默认关闭；浏览器里的虚拟设备经它送 DBOT 字节流 |
 
 四个本地端口都必须保持 loopback。当前产品没有远程控制认证边界，不支持通过反向
 代理、端口映射或局域网地址暴露。机器人不连接这些 TCP 端口，也不建立设备 WebSocket。
+虚拟设备连接同样只听 loopback；它不是设备生产者 WebSocket，只转运与 USB 相同的 DBOT 字节。
+
+### 虚拟设备连接 `:9022`（默认关闭）
+
+- 路径只有 `/virtual-device`，其它路径 `404`。
+- 握手 `Origin` 必须在允许列表里（默认 `https://thorb.com`、`http://localhost:*`、
+  `http://127.0.0.1:*`；`:*` 为任意端口），否则 `403`；没有 `Origin` 也是 `403`。
+- 只收发二进制消息，内容是 DBOT v1 字节流；文本消息以 `1003` 关闭。
+- 设备身份仍由 DBOT hello 决定；连接关闭等同拔线。
+
+控制台接口（`:5050`，同样受写请求 Origin 校验保护）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/setup/virtual-device` | `enabled`、`url`、`origins`、`default_origins` |
+| `PATCH` | `/api/setup/virtual-device` | `{"enabled": true\|false}` 和/或 `{"origins": "每行一个"}`（空 = 默认）；格式不对返回 `400` 并指出是哪一条 |
 
 ## 本机访问边界
 

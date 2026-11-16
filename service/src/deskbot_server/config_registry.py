@@ -65,6 +65,9 @@ ENV_KEYS: dict[str, tuple[str, bool]] = {
     "DESKBOT_WIFI_LINK_PORT": ("WiFi 备用链路监听端口（默认 9020）", False),
     "DESKBOT_WIFI_LINK_ADVERTISE_HOST": ("下发给设备的 PC 地址", False),
     "DESKBOT_DISCOVERY_UDP_PORT": ("机器人找 Core 的 UDP 广播应答端口（默认 9021）", False),
+    "DESKBOT_VIRTUAL_DEVICE_ENABLED": ("虚拟设备连接：本机 WebSocket（默认关闭）", False),
+    "DESKBOT_VIRTUAL_DEVICE_PORT": ("虚拟设备连接端口（默认 9022，只听 127.0.0.1）", False),
+    "DESKBOT_VIRTUAL_DEVICE_ORIGINS": ("虚拟设备连接允许的网页来源（逗号分隔，:* 表示任意端口）", False),
     "DESKBOT_TEMP_WARN_C": ("片内温度告警阈值 ℃（默认 70）", False),
     "DESKBOT_TEMP_CRIT_C": ("片内温度严重阈值 ℃（默认 85，自动减负）", False),
     # ---- RTC / LiveKit ----

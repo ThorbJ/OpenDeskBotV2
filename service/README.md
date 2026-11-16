@@ -31,7 +31,8 @@ Web 控制台 :5050（不打开串口）
 
 设备生产者 WebSocket 已关闭。`/asr_chat`、`/camera`、`/camera_uplink` 和
 `/device_pipeline` 生产者连接会返回 `usb_cdc_required`。保留的 WebSocket 仅用于
-浏览器调试订阅或第三方供应商协议。
+浏览器调试订阅或第三方供应商协议。唯一例外是默认关闭的「虚拟设备连接」（见下文），
+它只承载与 USB 完全相同的 DBOT 字节流，不是生产者 WebSocket。
 
 ## 安装与启动
 
@@ -203,11 +204,31 @@ DBOT v1 使用 CRC 保护的 24 字节帧头、payload CRC、sequence、session 
   `mic=open` 恢复（恢复不被确认会重试并记录）。纯 JSON PB（仅表情/舵机）不
   触碰麦克风。
 
+## 虚拟设备连接（可选，默认关闭）
+
+在浏览器里运行的虚拟机器人（同一份统一固件编译到虚拟硬件上，例如 WebAssembly）
+没有 USB 口，可以经本机 WebSocket 把它的 DBOT v1 字节流交给 Core：
+
+- 地址 `ws://127.0.0.1:9022/virtual-device`；每条二进制消息是 DBOT 字节流的一段，
+  双向字节与 USB CDC 完全相同，文本消息会被断开。
+- Core 把连接包装成串口（`WebSocketSerial`）交给同一个 `SerialDeviceManager`，
+  走同样的 hello / 心跳 / PB / ACK；完成 DBOT hello 后就是一条普通设备会话，
+  上层对话、表情、舵机、相机逻辑不变。`transport=virtual_ws`，「设备连接」页显示为
+  「虚拟设备（本机 WebSocket）」。网页关闭即等同拔线，由网页负责重连。
+- 默认关闭。在控制台「设备连接 → 虚拟设备连接」点「开启」，约 1 秒内生效，不用重启；
+  也可在 `.env` 写 `DESKBOT_VIRTUAL_DEVICE_ENABLED=1`。
+- 只监听 `127.0.0.1`（没有改监听地址的设置）。只接受允许来源的网页：检查 WebSocket
+  握手的 `Origin`，默认 `https://thorb.com`、`http://localhost:*`、`http://127.0.0.1:*`
+  （`:*` 表示任意端口，供本机开发），可在同一页改，或设 `DESKBOT_VIRTUAL_DEVICE_ORIGINS`
+  （逗号分隔）；没有 Origin 或不在列表里返回 `403`。端口可用 `DESKBOT_VIRTUAL_DEVICE_PORT` 改。
+- 虚拟设备没有 Wi-Fi 和可烧录的闪存：不做 Core 地址同步，固件升级仍要求 USB。
+
 ## Web 控制台功能
 
 | 功能 | 说明 |
 |------|------|
 | USB 设备 | 握手后自动发现；单设备自动选中，多设备切换当前运行时目标 |
+| 虚拟设备连接 | 「设备连接」页的开关与允许来源；默认关闭，只听本机 |
 | 定时提醒 | 在「主动陪伴」里：每天 / 每周几 / 只提醒一次，到点由小歪主动开口，可先演一段表演；对小歪说「每天九点提醒我…」也会加进来 |
 | 会话中心 | 本机唯一 `local` 会话的查看、清空和导出 |
 | 勿扰与待机行为 | 勿扰时段、空闲张望都在「主动陪伴」页；音色在「声音」页 |

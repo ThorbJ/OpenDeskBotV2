@@ -121,6 +121,17 @@ def _install_fakes(monkeypatch) -> _Ctx:
     async def _shutdown_rtc_runtime():
         ctx.events.append("rtc_runtime_shutdown")
 
+    class _FakeVirtualDeviceLink:
+        def __init__(self, attach):
+            ctx.virtual_device_attach = attach
+
+        async def run(self):
+            ctx.events.append("virtual_device_run")
+            await asyncio.Event().wait()
+
+        async def stop(self):
+            ctx.events.append("virtual_device_stop")
+
     async def _watch_forever():
         await asyncio.Event().wait()
 
@@ -187,6 +198,7 @@ def _install_fakes(monkeypatch) -> _Ctx:
     m(main_module, "DeskbotRtcGateway", _FakeGateway)
     m(main_module, "watch_llm_config", _watch_forever)
     m(main_module, "shutdown_rtc_runtime", _shutdown_rtc_runtime)
+    m(main_module, "VirtualDeviceLink", _FakeVirtualDeviceLink)
     # Sibling background loops (e.g. control-operation retention) touch the
     # real DB; keep them idle so this test stays hermetic.
     monkeypatch.setattr(
@@ -286,6 +298,31 @@ def test_shutdown_signal_cancels_pending_rtc_startup(
             < ctx.events.index("rtc_runtime_shutdown")
             < ctx.events.index("sdk_stop")
             < ctx.events.index("livekit_stop")
+        )
+
+    asyncio.run(_run())
+
+
+def test_virtual_device_link_follows_the_serial_bridge_lifecycle(
+    monkeypatch, restore_signal_handlers
+):
+    """虚拟设备连接接到同一个串口管理器上：串口桥起来后才开，停串口桥之前先关。"""
+
+    async def _run():
+        ctx = _install_fakes(monkeypatch)
+        task = asyncio.create_task(main_module.main())
+        await asyncio.wait_for(ctx.ws_serving.wait(), timeout=5)
+        await asyncio.sleep(0)
+        # 和 WiFi 监听器一样，交给 _FakeSerialBridge.manager.attach_stream_session
+        assert ctx.virtual_device_attach is _noop_async
+        assert ctx.events.index("serial_start") < ctx.events.index(
+            "virtual_device_run"
+        )
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert ctx.events.index("virtual_device_stop") < ctx.events.index(
+            "serial_stop"
         )
 
     asyncio.run(_run())

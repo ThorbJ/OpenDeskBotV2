@@ -107,6 +107,28 @@
       </div>
     </template>
 
+    <div class="blocktitle top" style="margin-top:22px">虚拟设备连接</div>
+    <div class="dev">
+      <div style="flex:1;min-width:220px">
+        <b>允许网页里的虚拟设备连接本机</b>
+        <small>在浏览器里运行的虚拟机器人（同一份固件跑在虚拟硬件上）经本机 WebSocket 连到这里，连上后和插 USB 的机器人一样使用。默认关闭；只监听本机 127.0.0.1，只接受下面列出的网页来源。</small>
+        <small v-if="vd">[[ vd.enabled ? '已开启' : '已关闭' ]] · 地址 [[ vd.url ]]</small>
+      </div>
+      <div class="btngroup">
+        <button class="btn" :class="vd && vd.enabled ? 'ghost' : 'primary'" type="button" :disabled="vdBusy || !vd" @click="saveVirtualDevice({enabled: !(vd && vd.enabled)})">[[ vd && vd.enabled ? '关闭' : '开启' ]]</button>
+      </div>
+    </div>
+    <div class="dev" v-if="vd">
+      <div style="flex:1;min-width:220px">
+        <b>允许的网页来源</b>
+        <small>每行一个，例如 https://thorb.com；结尾写 :* 表示任意端口（本机开发用）。留空保存即恢复默认。</small>
+        <textarea class="tinput" rows="3" v-model="vdOrigins" spellcheck="false" style="width:100%;max-width:420px;margin-top:6px"></textarea>
+      </div>
+      <div class="btngroup">
+        <button class="btn ghost" type="button" :disabled="vdBusy" @click="saveVirtualDevice({origins: vdOrigins})">保存来源</button>
+      </div>
+    </div>
+
     <p class="device-id-hint">
       拔掉 USB 不会删除设备历史。机器人记住的是 Core 的编号：PC 换了 IP 会自动找到，插上 USB 也会自动刷新；只有换了 WiFi 才需要重新同步。
     </p>
@@ -125,6 +147,7 @@ createApp({
     action:'', message:'', messageKind:'info', unsubscribe:null,
     wifi:null, wifiTransport:'', wifiBusy:false, pollTimer:null, core:null,
     needsPassword:false, pendingSsid:'', manualPassword:'', manualHint:'', ssidCandidates:[],
+    vd:null, vdOrigins:'', vdBusy:false,
   }; },
   computed:{
     busy(){ return !!this.action || this.wifiBusy; },
@@ -160,6 +183,7 @@ createApp({
     transportLabel(d){
       if(d.transport==='usb_cdc') return 'USB 直连';
       if(d.transport==='wifi_tcp') return 'WiFi 局域网';
+      if(d.transport==='virtual_ws') return '虚拟设备（本机 WebSocket）';
       return '等待连接';
     },
     lastSeenLabel(d){
@@ -182,6 +206,35 @@ createApp({
       }catch(e){
         this.message=e.message||'切换失败'; this.messageKind='error';
       }finally{ this.action=''; }
+    },
+    applyVirtualDevice(d){
+      this.vd=d;
+      this.vdOrigins=(d.origins||[]).join('\n');
+    },
+    async loadVirtualDevice(){
+      try{
+        const r=await fetch('/api/setup/virtual-device',{cache:'no-store'});
+        const d=await r.json();
+        if(r.ok && d.ok!==false) this.applyVirtualDevice(d);
+      }catch(e){ /* 控制台刚起时读不到，下次进页面再读 */ }
+    },
+    async saveVirtualDevice(patch){
+      if(this.vdBusy) return;
+      this.vdBusy=true; this.message='';
+      try{
+        const r=await fetch('/api/setup/virtual-device',{
+          method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch),
+        });
+        const d=await r.json();
+        if(!r.ok || d.ok===false) throw new Error(d.error||('HTTP '+r.status));
+        this.applyVirtualDevice(d);
+        this.message=('enabled' in patch)
+          ?(d.enabled?'虚拟设备连接已开启，约 1 秒内生效：'+d.url:'虚拟设备连接已关闭')
+          :'允许的网页来源已保存';
+        this.messageKind='info';
+      }catch(e){
+        this.message='保存失败：'+(e.message||e); this.messageKind='error';
+      }finally{ this.vdBusy=false; }
     },
     async refreshWifi(){
       if(!this.current) return;
@@ -234,6 +287,7 @@ createApp({
   mounted(){
     this.unsubscribe=window.DeskbotConsole.onChange(this.applySnapshot);
     void window.DeskbotConsole.refresh();
+    void this.loadVirtualDevice();
     this.pollTimer=setInterval(()=>{ if(!this.busy) void this.refreshWifi(); },10000);
   },
   beforeUnmount(){

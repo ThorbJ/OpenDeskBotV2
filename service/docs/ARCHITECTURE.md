@@ -207,6 +207,23 @@ Agent 的 `schedule_task` 工具（`application/timed_reminders`）直接往这�
 通过 WebSocket 子协议传递，只限制本机调试通道。豆包等供应商 WSS
 是 PC 出站连接，与设备 transport 无关。
 
+### 虚拟设备连接（`infrastructure/net/virtual_device_link.py`）
+
+可选的第三种设备 transport（`virtual_ws`），与 `usb_cdc`、`wifi_tcp` 并列：
+
+```text
+浏览器里的虚拟设备（统一固件 + 虚拟硬件）
+        │ ws://127.0.0.1:9022/virtual-device（Origin 白名单；二进制消息 = DBOT 字节流）
+        ▼
+VirtualDeviceListener → WebSocketSerial（SerialLike）
+        → SerialDeviceManager.attach_stream_session(transport="virtual_ws")
+        → 同一个 DeviceSession：hello / 心跳 / PB / ACK / 媒体队列
+```
+
+`VirtualDeviceLink` 每秒读一次设置，按 `DESKBOT_VIRTUAL_DEVICE_ENABLED` 启停监听，默认关闭。
+监听地址固定 `127.0.0.1`。会话关闭后不进入串口重试计划（与 `wifi_tcp` 一样由对端重连）；
+Core 地址同步与固件升级只对 `usb_cdc` 生效。
+
 ## 模块
 
 | 模块 | 职责 |
