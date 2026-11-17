@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 
 import pytest
 from websockets.asyncio.client import connect
@@ -31,7 +33,9 @@ def _manager():
     return SerialDeviceManager(SerialManagerConfig(enabled=False, hello_timeout=3.0))
 
 
-def _hello_ack(nonce: int, *, epoch: int = 7, sequence: int = 1) -> bytes:
+def _hello_ack(
+    nonce: int, *, epoch: int = 7, sequence: int = 1, timeout_ms: int = 6000
+) -> bytes:
     return encode_frame(
         Channel.CONTROL_JSON,
         encode_control_payload(
@@ -44,7 +48,7 @@ def _hello_ack(nonce: int, *, epoch: int = 7, sequence: int = 1) -> bytes:
                 "firmware": "0.0.59",
                 "session_epoch": epoch,
                 "heartbeat_ms": 1000,
-                "timeout_ms": 6000,
+                "timeout_ms": timeout_ms,
                 "max_payload": 1024 * 1024,
                 "capabilities": [
                     "control_json",
@@ -63,8 +67,18 @@ def _hello_ack(nonce: int, *, epoch: int = 7, sequence: int = 1) -> bytes:
     )
 
 
-async def _simulated_device(ws, *, stop: asyncio.Event) -> None:
-    """最小的"固件"：回 hello_ack，对要求确认的帧回 frame_ack。"""
+async def _simulated_device(
+    ws,
+    *,
+    stop: asyncio.Event,
+    timeout_ms: int = 6000,
+    pb_ack_delay: float | None = 0.0,
+) -> None:
+    """最小的"固件"：回 hello_ack，对要求确认的帧回 frame_ack。
+
+    ``pb_ack_delay``：PB 帧的确认晚这么多秒才发出，期间页面一个字节也不发
+    （后台标签页拿不到定时器时就是这样）；``None`` 表示永远不确认。
+    """
     decoder = FrameDecoder()
     sequence = 1
     while not stop.is_set():
@@ -75,7 +89,11 @@ async def _simulated_device(ws, *, stop: asyncio.Event) -> None:
         except ConnectionClosed:
             return
         for frame in decoder.feed(message):
-            if frame.channel != Channel.CONTROL_JSON:
+            if frame.channel == Channel.PB_WIRE:
+                if pb_ack_delay is None:
+                    continue
+                await asyncio.sleep(pb_ack_delay)
+            elif frame.channel != Channel.CONTROL_JSON:
                 continue
             sequence += 1
             if frame.flags & FrameFlag.ACK_REQUIRED:
@@ -98,7 +116,13 @@ async def _simulated_device(ws, *, stop: asyncio.Event) -> None:
                 continue
             payload = decode_control_payload(frame.payload)
             if payload.get("type") == "hello":
-                await ws.send(_hello_ack(int(payload["client_nonce"]), sequence=sequence))
+                await ws.send(
+                    _hello_ack(
+                        int(payload["client_nonce"]),
+                        sequence=sequence,
+                        timeout_ms=timeout_ms,
+                    )
+                )
 
 
 async def _eventually(predicate, timeout: float = 3.0) -> None:
@@ -134,6 +158,88 @@ def test_virtual_device_completes_dbot_hello_and_is_a_connected_device():
                 await device
             # 页面关掉 = 拔线：会话随之关闭，设备不再算已连接。
             await _eventually(lambda: manager.session_for_device(DEVICE_ID) is None)
+        finally:
+            await listener.stop()
+            await manager.stop()
+
+    asyncio.run(scenario())
+
+
+async def _connected_virtual_device(manager, listener, **device):
+    url = f"ws://127.0.0.1:{listener.port}/virtual-device"
+    ws = await connect(url, origin=THORB)
+    stop = asyncio.Event()
+    task = asyncio.create_task(_simulated_device(ws, stop=stop, **device))
+    await _eventually(lambda: manager.session_for_device(DEVICE_ID) is not None)
+    return ws, stop, task, manager.session_for_device(DEVICE_ID)
+
+
+def _pb_wire(req: str) -> str:
+    return json.dumps({"type": "pb_single", "req": req, "idx": 0, "chunk_ms": 1})
+
+
+def test_a_page_in_the_background_slows_a_pb_down_without_disconnecting():
+    """页面转到后台：设备变慢，不报错。
+
+    后台标签页大约每秒才拿到一次定时器，有时十几秒一次也没有，这期间帧确认
+    出不来。只要还在设备自己声明的存活时限（hello_ack timeout_ms）内，发 PB
+    的一方就该等，而不是用自己更短的发送超时把整条会话关掉。
+    """
+    from deskbot_server.infrastructure.net.virtual_device_link import (
+        VirtualDeviceListener,
+    )
+    from deskbot_server.ws.ws_send import _safe_send
+
+    async def scenario():
+        manager = _manager()
+        listener = VirtualDeviceListener(
+            manager.attach_stream_session, port=0, allowed_origins=(THORB,)
+        )
+        assert await listener.start()
+        try:
+            ws, stop, device, session = await _connected_virtual_device(
+                manager, listener, pb_ack_delay=1.5
+            )
+            # The caller's send budget (10 s in production) is shorter than
+            # the page's stall here, just as on 2026-11-17.
+            assert await _safe_send(session, _pb_wire("slow-page"), timeout=0.5)
+            assert not session.is_closed
+            assert manager.session_for_device(DEVICE_ID) is session
+            stop.set()
+            await device
+            await ws.close()
+        finally:
+            await listener.stop()
+            await manager.stop()
+
+    asyncio.run(scenario())
+
+
+def test_a_page_that_stops_answering_is_still_dropped_by_the_heartbeat():
+    from deskbot_server.infrastructure.net.virtual_device_link import (
+        VirtualDeviceListener,
+    )
+    from deskbot_server.ws.ws_send import _safe_send
+
+    async def scenario():
+        manager = _manager()
+        listener = VirtualDeviceListener(
+            manager.attach_stream_session, port=0, allowed_origins=(THORB,)
+        )
+        assert await listener.start()
+        try:
+            ws, stop, device, session = await _connected_virtual_device(
+                manager, listener, timeout_ms=1500, pb_ack_delay=None
+            )
+            started = time.monotonic()
+            assert not await _safe_send(session, _pb_wire("dead-page"))
+            # Released by the session's own liveness timeout, not by waiting
+            # out the longer send budget.
+            assert time.monotonic() - started < 5.0
+            assert session.is_closed
+            stop.set()
+            await device
+            await ws.close()
         finally:
             await listener.stop()
             await manager.stop()
