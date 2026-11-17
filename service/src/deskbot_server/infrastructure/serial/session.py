@@ -476,6 +476,20 @@ class DeviceSession:
     def last_error(self) -> BaseException | None:
         return self._last_error
 
+    @property
+    def min_send_timeout(self) -> float:
+        """Shortest caller-side send timeout that cannot cut this session short.
+
+        A send on this session always ends by itself: written and
+        acknowledged, failed by the frame ACK timeout, or released when the
+        heartbeat timeout closes a dead link.  ``ws_send`` closes a peer whose
+        send outlasts its own timeout, so a shorter caller timeout would
+        disconnect a link this session still considers alive -- e.g. a virtual
+        device whose browser tab is in the background and only gets a timer
+        slot every second or so.
+        """
+        return max(self._frame_ack_timeout, self._timeout_seconds) + 1.0
+
     def diagnostics(self, *, now: float | None = None) -> SessionDiagnostics:
         """Return enough state to distinguish silence from local congestion."""
 

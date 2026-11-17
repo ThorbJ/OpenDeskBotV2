@@ -28,6 +28,18 @@ def _send_timeout_for_message(message, *, base: float = SAFE_SEND_TIMEOUT) -> fl
             return min(60.0, max(base, n / 8000.0 + 2.0))
     return base
 
+
+def _peer_send_timeout(websocket, timeout: float) -> float:
+    """Never give up on a peer earlier than it gives up on itself.
+
+    A DBOT device session bounds its own sends (frame ACK and heartbeat
+    timeouts) and says how long that can take in ``min_send_timeout``.
+    """
+    floor = getattr(websocket, "min_send_timeout", None)
+    if isinstance(floor, (int, float)) and not isinstance(floor, bool):
+        return max(float(timeout), float(floor))
+    return timeout
+
 _WS_OUTBOUND_LOCK_ATTR = "_bot_outbound_send_lock"
 _PB_DEVICE_QUEUE_ATTR = "_bot_pb_device_downlink_queue"
 _PB_DEVICE_WORKER_ATTR = "_bot_pb_device_downlink_worker"
@@ -54,6 +66,7 @@ async def _safe_send_once(
     """
     if timeout is None:
         timeout = _send_timeout_for_message(message)
+    timeout = _peer_send_timeout(websocket, timeout)
     kind = "bytes" if isinstance(message, (bytes, bytearray)) else "text"
     n = len(message) if isinstance(message, (bytes, bytearray, str)) else 0
     try:
@@ -250,9 +263,12 @@ async def _safe_send_pb_json_then_binaries(
     if binaries and callable(bundle) and _sender_accepts_binaries(bundle):
         # USB 串口会话：JSON + 全部二进制在会话的 bundle 锁里原子发出（并发的
         # 表情 PB 不能插在中间；发送方被取消也由会话把已声明的二进制补完）。
-        total_timeout = max(
-            float(timeout),
-            sum(_send_timeout_for_message(b, base=timeout) for b in binaries),
+        total_timeout = _peer_send_timeout(
+            websocket,
+            max(
+                float(timeout),
+                sum(_send_timeout_for_message(b, base=timeout) for b in binaries),
+            ),
         )
         async with _get_ws_send_lock(websocket):
             try:

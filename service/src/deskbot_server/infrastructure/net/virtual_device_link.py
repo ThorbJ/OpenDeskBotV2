@@ -52,6 +52,12 @@ _READ_TIMEOUT = 0.05
 _WRITE_TIMEOUT = 5.0
 # One DBOT frame is far smaller; this only bounds a misbehaving page.
 _MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+# A local WebSocket never loses a frame, so a late frame ACK only means the
+# page is slow: a background tab gets a timer slot about once a second, and
+# sometimes none for many seconds.  The device should slow down then, not drop
+# off, so wait as long as the firmware's own liveness timeout (hello_ack
+# timeout_ms, 15 s) and leave a dead page to the heartbeat.
+_FRAME_ACK_TIMEOUT = 15.0
 
 
 def virtual_device_enabled() -> bool:
@@ -337,7 +343,12 @@ class VirtualDeviceListener:
         peer = websocket.remote_address or ("127.0.0.1", 0)
         label = f"virtual://{peer[0]}:{peer[1]}"
         try:
-            await self._attach(label, adapter, transport=VIRTUAL_DEVICE_TRANSPORT)
+            await self._attach(
+                label,
+                adapter,
+                transport=VIRTUAL_DEVICE_TRANSPORT,
+                frame_ack_timeout=_FRAME_ACK_TIMEOUT,
+            )
         except Exception as exc:
             logger.warning("[virtual_device] attach failed peer=%s err=%s", label, exc)
             adapter.close()

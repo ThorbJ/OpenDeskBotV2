@@ -224,6 +224,11 @@ VirtualDeviceListener → WebSocketSerial（SerialLike）
 监听地址固定 `127.0.0.1`。会话关闭后不进入串口重试计划（与 `wifi_tcp` 一样由对端重连）；
 Core 地址同步与固件升级只对 `usb_cdc` 生效。
 
+网页转到后台时浏览器会压低它的定时器（约每秒一次，有时十几秒没有），设备的回包随之变慢。
+本机 WebSocket 不丢帧，所以帧确认等到固件自己的存活时限（hello_ack `timeout_ms`，15 s），
+死页面交给心跳判断；`ws_send` 的发送超时也不会短于会话自己的时限
+（`DeviceSession.min_send_timeout`），慢而活着的设备不会被断开。
+
 ## 模块
 
 | 模块 | 职责 |

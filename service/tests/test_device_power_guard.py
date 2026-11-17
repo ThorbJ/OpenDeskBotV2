@@ -66,8 +66,9 @@ def test_firmware_defaults_to_continuous_uplink_and_has_a_mute_switch():
     assert "consume_rx_byte(s_wifi_rx_bulk[i]);" in pump and "drained += got;" in pump
     # Core 侧：WiFi 会话的帧确认超时放宽到 12 s（死链路仍由 6.5 s 心跳兜底），USB 保持 6 s
     manager = (ROOT / "service/src/deskbot_server/infrastructure/serial/manager.py").read_text(encoding="utf-8")
-    wifi_ctor = manager[manager.index("link_token_validator=link_token_validator,"):manager.index("self._sessions_by_port[name] = session")]
-    assert "frame_ack_timeout=12.0," in wifi_ctor
+    attach = manager[manager.index("async def attach_stream_session("):manager.index("self._sessions_by_port[name] = session")]
+    assert "frame_ack_timeout: float = 12.0," in attach
+    assert "frame_ack_timeout=frame_ack_timeout," in attach
     assert tuple(int(x) for x in version.split(".")) >= (0, 0, 59)
     assert tuple(int(x) for x in version.split(".")) >= (0, 0, 56)
     usb = (ROOT / "hardware/firmware/usb_transport.cpp").read_text(encoding="utf-8")

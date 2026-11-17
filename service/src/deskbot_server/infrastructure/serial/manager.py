@@ -394,6 +394,7 @@ class SerialDeviceManager:
         *,
         transport: str = "wifi_tcp",
         link_token_validator: Callable[[str, str], bool] | None = None,
+        frame_ack_timeout: float = 12.0,
     ) -> DeviceSession:
         """Adopt an externally accepted byte stream (e.g. a WiFi TCP socket).
 
@@ -422,7 +423,7 @@ class SerialDeviceManager:
             # 零窗口探测按秒退避（实测帧延迟 5～16 s）；6 s 就杀会话会让重连后
             # 重发的表情帧再次塞满窗口，循环误杀。固件 0.0.59 起整段收包根治
             # 慢泵，这里放宽到 12 s 兜空口丢包；死链路仍由 6.5 s 心跳兜底。
-            frame_ack_timeout=12.0,
+            frame_ack_timeout=frame_ack_timeout,
         )
         self._sessions_by_port[name] = session
         try:
